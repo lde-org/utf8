@@ -1,0 +1,137 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+          - os: ubuntu-22.04-arm
+          - os: ubuntu-22.04-arm
+            android: true
+          - os: windows-latest
+          - os: windows-11-arm
+          - os: macos-15
+          - os: macos-15-intel
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup lde
+        uses: lde-org/setup-lde@master
+        with:
+          version: nightly
+          platform: ${{ matrix.android && 'Android' || '' }}
+
+      - name: Run tests
+        if: "!matrix.android"
+        run: lde test
+
+      # The Android lde binary cannot run on the Ubuntu runner; it runs inside
+      # the Termux image instead. The workspace is made writable first because
+      # the container executes as a different user.
+      - name: Fix workspace permissions (Android)
+        if: matrix.android
+        run: |
+          chmod -R a+rw ${{ github.workspace }}
+          cp ~/.lde/lde ${{ github.workspace }}/lde
+
+      - name: Cache Termux image (Android)
+        if: matrix.android
+        id: cache-android-image
+        uses: actions/cache@v5
+        with:
+          path: /tmp/termux-android.tar
+          key: termux-android-v6
+
+      - name: Build Termux image (Android)
+        if: matrix.android && steps.cache-android-image.outputs.cache-hit != 'true'
+        run: |
+          docker run --privileged --platform linux/arm64 \
+            --name termux-build termux/termux-docker:aarch64 \
+            bash -c "apt update && apt install -y git clang cmake ninja openssl"
+          docker commit termux-build termux-android:latest
+          docker rm termux-build
+          docker save termux-android:latest -o /tmp/termux-android.tar
+
+      - name: Load Termux image (Android)
+        if: matrix.android
+        run: docker load -i /tmp/termux-android.tar
+
+      - name: Run tests (Android)
+        if: matrix.android
+        run: |
+          docker run --rm --privileged --platform linux/arm64 \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            termux-android:latest \
+            bash -c "/workspace/lde test"
+
+  test-musl:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+          - os: ubuntu-22.04-arm
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup musl lde
+        uses: lde-org/setup-lde@master
+        with:
+          version: nightly
+          platform: Linux
+          libc: musl
+
+      - name: Run tests (Alpine)
+        run: |
+          docker run --rm -w /workspace \
+            -v "${{ github.workspace }}":/workspace \
+            -v "$HOME/.lde/lde":/usr/local/bin/lde:ro \
+            alpine:3.20 \
+            sh -c "apk add --no-cache git ca-certificates libgcc && lde test"
+
+  test-freebsd:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # The FreeBSD binary is downloaded on the Ubuntu host and synced into the
+      # VM, so the VM does not need to fetch the lde release itself.
+      - name: Download FreeBSD lde
+        uses: lde-org/setup-lde@master
+        with:
+          version: nightly
+          platform: FreeBSD
+          arch: x86_64
+          dir: ${{ github.workspace }}
+
+      - name: Run tests (FreeBSD)
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.5"
+          arch: x86_64
+          sync: rsync
+          prepare: pkg install -y git ca_root_nss gcc
+          run: |
+            set -e
+            certctl rehash
+            chmod +x lde
+            ./lde test

@@ -1,0 +1,14 @@
+{
+	"$schema": "https://raw.githubusercontent.com/lde-org/lde/master/schemas/lde.schema.json",
+	"name": "utf8",
+	"description": "A fast, lean UTF-8 library for LuaJIT, with FFI acceleration and a Windows-native codec path.",
+	"authors": ["David Cruz <david@bycruz.dev>"],
+	"version": "0.1.0",
+	"dependencies": {},
+	"devDependencies": {
+		"lde-test": { "git": "https://github.com/lde-org/lde" }
+	},
+	"features": {
+		"windows": ["utf8.raw.windows"]
+	}
+}
